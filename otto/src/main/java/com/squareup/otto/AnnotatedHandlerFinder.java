@@ -30,6 +30,8 @@ import java.util.Set;
  * @author Cliff Biffle
  * @author Louis Wasserman
  * @author Jake Wharton
+ * @author Kamil Wisniewski
+ * @author Xavier Rubio Jansana
  */
 final class AnnotatedHandlerFinder {
 
@@ -43,11 +45,39 @@ final class AnnotatedHandlerFinder {
 
   /**
    * Load all methods annotated with {@link Produce} or {@link Subscribe} into their respective caches for the
-   * specified class.
+   * specified class, and recursively for its parent, if class is anotated with InheritSubscribers.
    */
-  private static void loadAnnotatedMethods(Class<?> listenerClass) {
+  private static void loadAnnotatedMethodsRecursive(Class<?> listenerClass) {
     Map<Class<?>, Set<Method>> subscriberMethods = new HashMap<Class<?>, Set<Method>>();
     Map<Class<?>, Method> producerMethods = new HashMap<Class<?>, Method>();
+
+    Class<?> clazz = listenerClass;
+
+    do {
+      loadAnnotatedMethods(clazz, subscriberMethods, producerMethods);
+      if (clazz.isAnnotationPresent(InheritSubscribers.class)) {
+        String clazzName = clazz.getName();
+        clazz = clazz.getSuperclass();
+        String parentName = clazz.getName();
+        if (parentName.startsWith("java.") || parentName.startsWith("android.")) {
+          throw new IllegalArgumentException("Class " + clazzName + " has @InheritSubscribers annotation but its "
+              + "parent class is " + parentName + ", which is forbidden.");
+        }
+      } else {
+        clazz = null;
+      }
+    } while (clazz != null);
+
+    PRODUCERS_CACHE.put(listenerClass, producerMethods);
+    SUBSCRIBERS_CACHE.put(listenerClass, subscriberMethods);
+  }
+
+  /**
+   * Load all methods annotated with {@link Produce} or {@link Subscribe} into their respective caches for the
+   * specified class.
+   */
+  private static void loadAnnotatedMethods(Class<?> listenerClass, Map<Class<?>, Set<Method>> subscriberMethods,
+                                                                   Map<Class<?>, Method> producerMethods) {
 
     for (Method method : listenerClass.getDeclaredMethods()) {
       // The compiler sometimes creates synthetic bridge methods as part of the
@@ -112,9 +142,6 @@ final class AnnotatedHandlerFinder {
         producerMethods.put(eventType, method);
       }
     }
-
-    PRODUCERS_CACHE.put(listenerClass, producerMethods);
-    SUBSCRIBERS_CACHE.put(listenerClass, subscriberMethods);
   }
 
   /** This implementation finds all methods marked with a {@link Produce} annotation. */
@@ -123,7 +150,7 @@ final class AnnotatedHandlerFinder {
     Map<Class<?>, EventProducer> handlersInMethod = new HashMap<Class<?>, EventProducer>();
 
     if (!PRODUCERS_CACHE.containsKey(listenerClass)) {
-      loadAnnotatedMethods(listenerClass);
+      loadAnnotatedMethodsRecursive(listenerClass);
     }
     Map<Class<?>, Method> methods = PRODUCERS_CACHE.get(listenerClass);
     if (!methods.isEmpty()) {
@@ -142,7 +169,7 @@ final class AnnotatedHandlerFinder {
     Map<Class<?>, Set<EventHandler>> handlersInMethod = new HashMap<Class<?>, Set<EventHandler>>();
 
     if (!SUBSCRIBERS_CACHE.containsKey(listenerClass)) {
-      loadAnnotatedMethods(listenerClass);
+      loadAnnotatedMethodsRecursive(listenerClass);
     }
     Map<Class<?>, Set<Method>> methods = SUBSCRIBERS_CACHE.get(listenerClass);
     if (!methods.isEmpty()) {
